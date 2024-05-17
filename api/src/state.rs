@@ -14,23 +14,63 @@ use crate::{
 };
 use anyhow::Context as AnyhowContext;
 use aptos_api_types::{
-    verify_module_identifier, Address, AptosErrorCode, AsConverter, IdentifierWrapper,
+    verify_module_identifier, Address, AptosErrorCode, AsConverter, IdentifierWrapper, LedgerInfo,
     MoveModuleBytecode, MoveResource, MoveStructTag, MoveValue, RawStateValueRequest,
     RawTableItemRequest, TableItemRequest, VerifyInput, VerifyInputWithRecursion, U64,
 };
+use aptos_crypto::hash::CryptoHash;
+use aptos_crypto::HashValue;
+use aptos_storage_interface::DbReader;
+use aptos_types::account_config::AccountResource;
+use aptos_types::epoch_change::EpochChangeProof;
+use aptos_types::ledger_info::LedgerInfoWithSignatures;
+use aptos_types::proof::{SparseMerkleProof, TransactionAccumulatorProof};
 use aptos_types::state_store::{state_key::StateKey, table::TableHandle, TStateView};
-use move_core_types::language_storage::StructTag;
+use aptos_types::transaction::TransactionInfo;
+use aptos_types::trusted_state::TrustedState;
+use aptos_types::validator_verifier::ValidatorVerifier;
+use aptos_types::waypoint::Waypoint;
+use aptos_vm::data_cache::AsMoveResolver;
+use move_core_types::move_resource::MoveStructType;
+use move_core_types::{language_storage::StructTag, resolver::MoveResolver};
 use poem_openapi::{
     param::{Path, Query},
     payload::Json,
     OpenApi,
 };
+use serde::{Deserialize, Serialize};
 use std::{convert::TryInto, sync::Arc};
 
 /// API for retrieving individual state
 #[derive(Clone)]
 pub struct StateApi {
     pub context: Arc<Context>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct AccountProofPayload {
+    /// Proof for the account inclusion
+    state_proof: SparseMerkleProof,
+    /// Account leaf key
+    element_key: HashValue,
+    /// Account state value
+    element_hash: HashValue,
+    /// Proof for the transaction inclusion
+    transaction_proof: TransactionAccumulatorProof,
+    /// Hashed representation of the transaction
+    transaction: TransactionInfo,
+    /// Transaction version.
+    transaction_index: u64,
+    /// Signed Ledger info with the transaction
+    ledger_info_v0: LedgerInfoWithSignatures,
+    /// ValidatorVerifier valid for the proof
+    validator_verifier: ValidatorVerifier,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct EpochChangeProofPayload {
+    epoch_change_proof: EpochChangeProof,
+    trusted_state: TrustedState,
 }
 
 #[OpenApi]
@@ -79,6 +119,57 @@ impl StateApi {
                 resource_type.0,
                 ledger_version.0.map(|inner| inner.0),
             )
+        })
+        .await
+    }
+
+    #[oai(
+        path = "/accounts/:address/proof",
+        method = "get",
+        operation_id = "get_account_proof",
+        tag = "ApiTags::Accounts"
+    )]
+    async fn get_account_proof(
+        &self,
+        accept_type: AcceptType,
+        /// Address of account with or without a `0x` prefix
+        address: Path<Address>,
+        /// Block height to get state of account
+        ///
+        /// If not provided, it will be the latest block
+        block_height: Query<Option<U64>>,
+    ) -> BasicResultWith404<Vec<u8>> {
+        fail_point_poem("endpoint_get_account_proof")?;
+        self.context
+            .check_api_output_enabled("Get account proof", &accept_type)?;
+
+        let api = self.clone();
+        api_spawn_blocking(move || {
+            api.proof(&accept_type, address.0, block_height.0.map(|inner| inner.0))
+        })
+        .await
+    }
+
+    #[oai(
+        path = "/epoch/proof",
+        method = "get",
+        operation_id = "get_epoch_change_proof",
+        tag = "ApiTags::General"
+    )]
+    async fn get_epoch_change_proof(
+        &self,
+        accept_type: AcceptType,
+        /// Epoch number for the change proof
+        ///
+        /// If not provided, it will be the latest epoch change
+        epoch_number: Query<Option<U64>>,
+    ) -> BasicResultWith404<Vec<u8>> {
+        self.context
+            .check_api_output_enabled("Get account resource", &accept_type)?;
+
+        let api = self.clone();
+        api_spawn_blocking(move || {
+            api.epoch_change_proof(&accept_type, epoch_number.0.map(|inner| inner.0))
         })
         .await
     }
@@ -328,6 +419,204 @@ impl StateApi {
                 bytes.to_vec(),
                 &ledger_info,
                 BasicResponseStatus::Ok,
+            )),
+        }
+    }
+
+    fn epoch_change_proof(
+        &self,
+        accept_type: &AcceptType,
+        epoch_number: Option<u64>,
+    ) -> BasicResultWith404<Vec<u8>> {
+        let (ledger_info, _, _) = self.context.state_view(None)?;
+
+        fn get_epoch_change_proof_payload(
+            db: &Arc<dyn DbReader>,
+            epoch_number: u64,
+            ledger_info: &LedgerInfo,
+        ) -> Result<(TrustedState, EpochChangeProof), BasicErrorWith404> {
+            let mut epoch_change_proof: EpochChangeProof = db
+                .get_epoch_ending_ledger_infos(epoch_number - 2, epoch_number)
+                .map_err(|err| {
+                    BasicErrorWith404::internal_with_code(
+                        err,
+                        AptosErrorCode::InternalError,
+                        ledger_info,
+                    )
+                })?;
+
+            assert_eq!(
+                epoch_change_proof.ledger_info_with_sigs.len(),
+                2,
+                "Expected two LedgerInfoWithSignatures in EpochchangeProof"
+            );
+
+            let penultimate_li = epoch_change_proof.ledger_info_with_sigs.remove(0);
+            let waypoint = Waypoint::new_any(penultimate_li.ledger_info());
+
+            Ok((
+                TrustedState::EpochState {
+                    waypoint,
+                    epoch_state: aptos_types::epoch_state::EpochState::new(
+                        epoch_number - 1,
+                        penultimate_li
+                            .ledger_info()
+                            .next_epoch_state()
+                            .expect("Latest li for epoch change should contain a next EpochState")
+                            .clone()
+                            .verifier,
+                    ),
+                },
+                epoch_change_proof,
+            ))
+        }
+
+        let (trusted_state, epoch_change_proof): (TrustedState, EpochChangeProof) =
+            match epoch_number {
+                Some(epoch_number) => {
+                    get_epoch_change_proof_payload(&self.context.db, epoch_number, &ledger_info)?
+                },
+                None => {
+                    let latest_epoch_state: aptos_types::epoch_state::EpochState =
+                        self.context.db.get_latest_epoch_state().map_err(|err| {
+                            BasicErrorWith404::internal_with_code(
+                                err,
+                                AptosErrorCode::InternalError,
+                                &ledger_info,
+                            )
+                        })?;
+                    get_epoch_change_proof_payload(
+                        &self.context.db,
+                        latest_epoch_state.epoch,
+                        &ledger_info,
+                    )?
+                },
+            };
+
+        let epoch_change_proof_payload = EpochChangeProofPayload {
+            epoch_change_proof,
+            trusted_state,
+        };
+
+        match accept_type {
+            AcceptType::Bcs => BasicResponse::try_from_encoded((
+                bcs::to_bytes(&epoch_change_proof_payload).unwrap(),
+                &ledger_info,
+                BasicResponseStatus::Ok,
+            )),
+            _ => Err(api_forbidden(
+                "Get epoch change proof",
+                "Only BCS is supported as an AcceptType.",
+            )),
+        }
+    }
+
+    fn proof(
+        &self,
+        accept_type: &AcceptType,
+        address: Address,
+        block_height: Option<u64>,
+    ) -> BasicResultWith404<Vec<u8>> {
+        // Get latest ledger info
+        let (ledger_info, ledger_version, state_view) = self.context.state_view(None)?;
+
+        let tx_version = if let Some(block_height) = block_height {
+            self.context
+                .get_block_by_height(block_height, &ledger_info, false)?
+                .last_version
+        } else {
+            ledger_version
+        };
+
+        let latest_li_w_sig = self
+            .context
+            .get_latest_ledger_info_with_signatures()
+            .map_err(|err| {
+                BasicErrorWith404::internal_with_code(
+                    err,
+                    AptosErrorCode::InternalError,
+                    &ledger_info,
+                )
+            })?;
+
+        // Compute account key
+        let account_key = StateKey::resource(address.inner(), &AccountResource::struct_tag())
+            .map_err(|err| {
+                BasicErrorWith404::internal_with_code(
+                    err,
+                    AptosErrorCode::InternalError,
+                    &ledger_info,
+                )
+            })?;
+
+        let latest_epoch_state: aptos_types::epoch_state::EpochState =
+            state_view.db.get_latest_epoch_state().map_err(|err| {
+                BasicErrorWith404::internal_with_code(
+                    err,
+                    AptosErrorCode::InternalError,
+                    &ledger_info,
+                )
+            })?;
+
+        // Get state value and sparse merkle proof
+        let (state_value, state_proof) = state_view
+            .db
+            .get_state_value_with_proof_by_version(&account_key, tx_version)
+            .map_err(|err| {
+                BasicErrorWith404::internal_with_code(
+                    err,
+                    AptosErrorCode::InternalError,
+                    &ledger_info,
+                )
+            })?;
+
+        let sparse_proof: SparseMerkleProof = state_proof;
+        let element_key = account_key.hash();
+        let element_hash = state_value
+            .ok_or_else(|| {
+                BasicErrorWith404::internal_with_code(
+                    "No state value from get_state_value_with_proof_by_version",
+                    AptosErrorCode::InternalError,
+                    &ledger_info,
+                )
+            })?
+            .hash();
+
+        let txn_w_proof = self
+            .context
+            .db
+            .get_transaction_by_version(tx_version, latest_li_w_sig.ledger_info().version(), false)
+            .map_err(|err| {
+                BasicErrorWith404::internal_with_code(
+                    err,
+                    AptosErrorCode::InternalError,
+                    &ledger_info,
+                )
+            })?;
+
+        let ledger_info_to_transaction_info_proof =
+            txn_w_proof.proof.ledger_info_to_transaction_info_proof;
+
+        let proof = AccountProofPayload {
+            state_proof: sparse_proof,
+            element_key,
+            element_hash,
+            transaction_proof: ledger_info_to_transaction_info_proof,
+            transaction: txn_w_proof.proof.transaction_info.clone(),
+            transaction_index: tx_version,
+            ledger_info_v0: latest_li_w_sig,
+            validator_verifier: latest_epoch_state.verifier,
+        };
+
+        match accept_type {
+            AcceptType::Bcs => BasicResponse::try_from_encoded((
+                bcs::to_bytes(&proof).unwrap(),
+                &ledger_info,
+                BasicResponseStatus::Ok,
+            )),
+            _ => Err(api_forbidden(
+                "Get account proof",
+                "Only BCS is supported as an AcceptType.",
             )),
         }
     }

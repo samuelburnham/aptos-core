@@ -137,6 +137,7 @@ pub fn new_test_context(
     let ret =
         db_bootstrapper::maybe_bootstrap::<AptosVM>(&db_rw, &genesis, genesis_waypoint).unwrap();
     assert!(ret.is_some());
+    dbg!(&ret.unwrap().signatures());
 
     let mempool = MockSharedMempool::new_in_runtime(&db_rw, VMValidator::new(db.clone()));
 

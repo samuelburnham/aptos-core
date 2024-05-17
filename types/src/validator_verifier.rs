@@ -423,6 +423,11 @@ impl ValidatorVerifier {
         self.validator_infos.iter().map(|info| info.address)
     }
 
+    /// Get the validator infos
+    pub fn validator_infos(&self) -> &[ValidatorConsensusInfo] {
+        &self.validator_infos
+    }
+
     /// Returns the number of authors to be validated.
     pub fn len(&self) -> usize {
         self.validator_infos.len()
