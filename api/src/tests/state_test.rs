@@ -20,6 +20,17 @@ async fn test_get_account_resource() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_get_account_proof() {
+    let mut context = new_test_context(current_function_name!());
+    let resp = context
+        .get(&get_account_proof("0xA550C18"))
+        .await;
+    println!("{}", &resp);
+    panic!("a");
+    context.check_golden_output(resp);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_get_account_resource_by_invalid_address() {
     let mut context = new_test_context(current_function_name!());
     let invalid_addresses = vec!["00x1", "0xzz"];
@@ -299,6 +310,10 @@ async fn test_get_table_item() {
 
 fn get_account_resource(address: &str, struct_tag: &str) -> String {
     format!("/accounts/{}/resource/{}", address, struct_tag)
+}
+
+fn get_account_proof(address: &str) -> String {
+    format!("/accounts/{}/proof", address)
 }
 
 fn get_account_resource_with_version(address: &str, struct_tag: &str, version: u64) -> String {

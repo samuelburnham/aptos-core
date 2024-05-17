@@ -357,6 +357,20 @@ impl From<(TransactionInfo, Vec<Event>, u64)> for Transaction {
     }
 }
 
+/// Accumulator Proof for a tx
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Object)]
+pub struct TransactionAccumulatorProof {
+    pub siblings: Vec<HashValue>
+}
+
+impl From<aptos_types::proof::TransactionAccumulatorProof> for TransactionAccumulatorProof {
+    fn from(value: aptos_types::proof::TransactionAccumulatorProof) -> Self {
+        Self {
+            siblings: value.siblings().iter().map(|sibling| HashValue::from(*sibling)).collect(),
+        }
+    }
+}
+
 /// Information related to how a transaction affected the state of the blockchain
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct TransactionInfo {

@@ -958,14 +958,30 @@ async fn apply_output_chunk<ChunkExecutor: ChunkExecutorTrait + 'static>(
     // Apply the output chunk
     let num_outputs = outputs_with_proof.transactions_and_outputs.len();
     let result = tokio::task::spawn_blocking(move || {
-        chunk_executor.enqueue_chunk_by_transaction_outputs(
-            outputs_with_proof,
+        let res = chunk_executor.enqueue_chunk_by_transaction_outputs(
+            outputs_with_proof.clone(),
             &target_ledger_info,
             end_of_epoch_ledger_info.as_ref(),
-        )
+        );
+        if res.is_ok() {
+            info!(LogSchema::new(LogEntry::StorageSynchronizer).message(&format!(
+                "apply_output_chunk, ledger_info is {:?}",
+                target_ledger_info))
+            );
+            info!(LogSchema::new(LogEntry::StorageSynchronizer).message(&format!(
+                "apply_output_chunk, outputs_with_proof {:?}",
+                &outputs_with_proof))
+            );
+            info!(LogSchema::new(LogEntry::StorageSynchronizer).message(&format!(
+                "apply_output_chunk, end_of_epoch_ledger_info is {:?}",
+                end_of_epoch_ledger_info))
+            );
+        }
+        res
     })
-    .await
-    .expect("Spawn_blocking(apply_output_chunk) failed!");
+        .await
+        .expect("Spawn_blocking(apply_output_chunk) failed!");
+
 
     // Update the logs and metrics if the chunk was applied successfully
     if result.is_ok() {

@@ -17,7 +17,7 @@ use std::sync::Arc;
 type Result<T, E = StateviewError> = std::result::Result<T, E>;
 
 pub struct DbStateView {
-    db: Arc<dyn DbReader>,
+    pub db: Arc<dyn DbReader>,
     version: Option<Version>,
     verify_against_state_root_hash: Option<HashValue>,
 }

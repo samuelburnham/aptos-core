@@ -40,7 +40,8 @@ impl DbReader for AptosDB {
         gauged_api("get_transaction_auxiliary_data_by_version", || {
             self.error_if_ledger_pruned("Transaction", version)?;
             self.ledger_db
-                .transaction_auxiliary_data_db().get_transaction_auxiliary_data(version)
+                .transaction_auxiliary_data_db()
+                .get_transaction_auxiliary_data(version)
         })
     }
 
@@ -557,7 +558,10 @@ impl DbReader for AptosDB {
             for item in iter.take(num_events) {
                 let (_block_height, block_info) = item?;
                 let first_version = block_info.first_version();
-                let event = self.ledger_db.event_db().expect_new_block_event(first_version)?;
+                let event = self
+                    .ledger_db
+                    .event_db()
+                    .expect_new_block_event(first_version)?;
                 events.push(EventWithVersion::new(first_version, event));
             }
 

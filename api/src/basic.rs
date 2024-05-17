@@ -1,6 +1,7 @@
 // Copyright © Aptos Foundation
 // SPDX-License-Identifier: Apache-2.0
 
+use crate::response::{BasicErrorWith404, BasicResponse, BasicResponseStatus, BasicResultWith404};
 use crate::{
     accept_type::AcceptType,
     context::{api_spawn_blocking, Context},
@@ -9,7 +10,10 @@ use crate::{
     ApiTags,
 };
 use anyhow::Context as AnyhowContext;
-use aptos_api_types::AptosErrorCode;
+use aptos_api_types::{AptosErrorCode, U64};
+use aptos_crypto::HashValue;
+use aptos_types::block_info::BlockHeight;
+use aptos_types::transaction::Version;
 use poem_openapi::{param::Query, payload::Html, Object, OpenApi};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -34,6 +38,14 @@ pub struct BasicApi {
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize, Object)]
 pub struct HealthCheckSuccess {
     message: String,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize, Object)]
+pub struct TestPayload {
+    li_version: U64,
+    first_viable_version: U64,
+    latest_state_checkpoint: U64,
+    snapshot_before: U64,
 }
 
 impl HealthCheckSuccess {
@@ -117,5 +129,97 @@ impl BasicApi {
             HealthCheckResponseStatus::Ok,
             &accept_type,
         ))
+    }
+
+    #[oai(
+        path = "/-/test",
+        method = "get",
+        operation_id = "test",
+        tag = "ApiTags::General"
+    )]
+    async fn test(&self, accept_type: AcceptType) -> BasicResultWith404<TestPayload> {
+        let (ledger_info, ledger_version, _) = self.context.state_view(None)?;
+
+        let latest_li_w_sig = self
+            .context
+            .get_latest_ledger_info_with_signatures()
+            .map_err(|err| {
+                BasicErrorWith404::internal_with_code(
+                    err,
+                    AptosErrorCode::InternalError,
+                    &ledger_info,
+                )
+            })?;
+
+        assert_eq!(latest_li_w_sig.ledger_info().version(), ledger_version, "Retrieved a latest signed ledger info with a different version than latest ledger info.");
+
+        let (first_viable_version, _): (Version, BlockHeight) =
+            self.context.db.get_first_viable_block().map_err(|err| {
+                BasicErrorWith404::internal_with_code(
+                    format!("first viable block: {}", err),
+                    AptosErrorCode::InternalError,
+                    &ledger_info,
+                )
+            })?;
+
+        let latest_state_checkpoint: Option<Version> = self
+            .context
+            .db
+            .get_latest_state_checkpoint_version()
+            .map_err(|err| {
+                BasicErrorWith404::internal_with_code(
+                    format!("latest state checkpoint: {}", err),
+                    AptosErrorCode::InternalError,
+                    &ledger_info,
+                )
+            })?;
+
+        let snapshot_before: Option<(Version, HashValue)> = self
+            .context
+            .db
+            .get_state_snapshot_before(ledger_version + 1)
+            .map_err(|err| {
+                BasicErrorWith404::internal_with_code(
+                    format!("state snapshot before: {}", err),
+                    AptosErrorCode::InternalError,
+                    &ledger_info,
+                )
+            })?;
+
+        match accept_type {
+            AcceptType::Json => BasicResponse::try_from_json((
+                TestPayload {
+                    li_version: U64::from(ledger_version),
+                    first_viable_version: U64::from(first_viable_version),
+                    latest_state_checkpoint: latest_state_checkpoint
+                        .or_else(|| Some(0))
+                        .map(U64::from)
+                        .unwrap(),
+                    snapshot_before: snapshot_before
+                        .or_else(|| Some((0, HashValue::default())))
+                        .map(|(version, _)| U64::from(version))
+                        .unwrap(),
+                },
+                &ledger_info,
+                BasicResponseStatus::Ok,
+            )),
+            AcceptType::Bcs => BasicResponse::try_from_encoded((
+                bcs::to_bytes(&TestPayload {
+                    li_version: U64::from(ledger_version),
+                    first_viable_version: U64::from(first_viable_version),
+                    latest_state_checkpoint: latest_state_checkpoint
+                        .or_else(|| Some(0))
+                        .map(U64::from)
+                        .unwrap(),
+                    snapshot_before: snapshot_before
+                        .or_else(|| Some((0, HashValue::default())))
+                        .map(|(version, _)| U64::from(version))
+                        .unwrap(),
+                })
+                .unwrap(),
+                &ledger_info,
+                BasicResponseStatus::Ok,
+            )),
+        }
     }
 }
