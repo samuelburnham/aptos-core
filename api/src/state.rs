@@ -597,6 +597,26 @@ impl StateApi {
         let ledger_info_to_transaction_info_proof =
             txn_w_proof.proof.ledger_info_to_transaction_info_proof;
 
+        // Verify proof
+        sparse_proof
+            .verify_by_hash(
+                txn_w_proof
+                    .clone()
+                    .transaction_info
+                    .deref()
+                    .state_checkpoint_hash()
+                    .unwrap(),
+                element_key,
+                Some(element_hash),
+            )
+            .map_err(|err| {
+                BasicErrorWith404::internal_with_code(
+                    err,
+                    AptosErrorCode::InternalError,
+                    &ledger_info,
+                )
+            })?;
+
         let proof = AccountProofPayload {
             state_proof: sparse_proof,
             element_key,
