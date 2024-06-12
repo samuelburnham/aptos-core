@@ -39,6 +39,7 @@ use poem_openapi::{
     OpenApi,
 };
 use serde::{Deserialize, Serialize};
+use std::ops::Deref;
 use std::{convert::TryInto, sync::Arc};
 
 /// API for retrieving individual state
@@ -594,14 +595,12 @@ impl StateApi {
                 )
             })?;
 
-        let ledger_info_to_transaction_info_proof =
-            txn_w_proof.proof.ledger_info_to_transaction_info_proof;
-
         // Verify proof
         sparse_proof
             .verify_by_hash(
                 txn_w_proof
                     .clone()
+                    .proof
                     .transaction_info
                     .deref()
                     .state_checkpoint_hash()
@@ -616,6 +615,9 @@ impl StateApi {
                     &ledger_info,
                 )
             })?;
+
+        let ledger_info_to_transaction_info_proof =
+            txn_w_proof.proof.ledger_info_to_transaction_info_proof;
 
         let proof = AccountProofPayload {
             state_proof: sparse_proof,
