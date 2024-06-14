@@ -10,7 +10,8 @@ on:
 jobs:
   check-tags:
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -19,21 +20,27 @@ jobs:
         id: latest-tag
         run: |
           LATEST_TAG=$(curl --silent "https://api.github.com/repos/aptos-labs/aptos-core/releases" | jq -r '.[] | select(.name | ascii_downcase | contains("mainnet")) | .tag_name' | grep '^aptos-node-v' | sort -V | tail -n 1)
-          CURRENT_TAG=$(git describe --tags `git rev-list --tags --max-count=1`)
-          if [[ $(echo -e "$CURRENT_TAG\n$LATEST_TAG" | sort -V | tail -n 1) != $CURRENT_TAG ]]; then
-            COMMIT_SHA=$(curl --silent "https://api.github.com/repos/aptos-labs/aptos-core/git/refs/tags/$LATEST_TAG" | jq -r .object.sha)
-            echo "tag=${LATEST_TAG}" | tee -a $GITHUB_OUTPUT
-            echo "sha=${COMMIT_SHA}" | tee -a $GITHUB_OUTPUT
-          else
-            echo "The current tag is up to date."
-            exit 0
+          # Check if there are any tags
+          LOCAL_TAGS=$(git rev-list --tags --max-count=1 2>/dev/null)
+          if [[ -n "$LOCAL_TAGS" ]]; then
+            # If tags exist, describe the most recent tag
+            CURRENT_TAG=$(git describe --tags $(git rev-list --tags --max-count=1))
+            if [[ $(echo -e "$CURRENT_TAG\n$LATEST_TAG" | sort -V | tail -n 1) == $CURRENT_TAG ]]; then
+              echo "The current tag is up to date."
+              exit 0
+            fi
           fi
+          # If the current tag is not up to date, proceed to open an issue
+          COMMIT_SHA=$(curl --silent "https://api.github.com/repos/aptos-labs/aptos-core/git/refs/tags/$LATEST_TAG" | jq -r .object.sha)
+          echo "tag=${LATEST_TAG}" | tee -a $GITHUB_OUTPUT
+          echo "sha=${COMMIT_SHA}" | tee -a $GITHUB_OUTPUT
 
       - name: Fetch upstream branch for latest tag
         run: |
           git remote add upstream https://github.com/aptos-labs/aptos-core.git
-          git fetch upstream ${{ steps.latest-tag.outputs.sha }}:refs/remotes/upstream/${{ steps.latest-tag.outputs.tag }}
-          git push origin ${{ steps.latest-tag.outputs.tag }}
+          git fetch upstream ${{ steps.latest-tag.outputs.sha }}:refs/heads/${{ steps.latest-tag.outputs.tag }}
+          #git checkout refs/heads/${{ steps.latest-tag.outputs.tag }}
+          git push origin refs/heads/${{ steps.latest-tag.outputs.tag }}
       
       # Note: This won't create duplicate issues, as once the latest tag branch is pushed to remote it will be the new current tag
       # Thus, the workflow will exit in the `Fetch latest tag` step as up to date
