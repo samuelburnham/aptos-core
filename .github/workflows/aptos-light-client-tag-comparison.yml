@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Fetch latest tag
         id: latest-tag
@@ -31,17 +33,45 @@ jobs:
             fi
           fi
           # If the current tag is not up to date, proceed to open an issue
-          COMMIT_SHA=$(curl --silent "https://api.github.com/repos/aptos-labs/aptos-core/git/refs/tags/$LATEST_TAG" | jq -r .object.sha)
           echo "tag=${LATEST_TAG}" | tee -a $GITHUB_OUTPUT
-          echo "sha=${COMMIT_SHA}" | tee -a $GITHUB_OUTPUT
 
-      - name: Fetch upstream branch for latest tag
+      - name: Set up git
         run: |
-          git remote add upstream https://github.com/aptos-labs/aptos-core.git
-          git fetch upstream ${{ steps.latest-tag.outputs.sha }}:refs/heads/${{ steps.latest-tag.outputs.tag }}
-          #git checkout refs/heads/${{ steps.latest-tag.outputs.tag }}
-          git push origin refs/heads/${{ steps.latest-tag.outputs.tag }}
-      
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          #- name: Add upstream remote
+          #  run: |
+          #    git remote add upstream "${{ github.server_url }}/aptos-labs/aptos-core.git"
+          #    git fetch upstream --tags
+
+      - name: Sync tag to branch
+        uses: repo-sync/github-sync@v2
+        with:
+          source_repo: "${{ github.server_url }}/aptos-labs/aptos-core.git"
+          source_branch: "refs/tags/${{ steps.latest-tag.outputs.tag }}"
+          destination_branch: "upstream/${{ steps.latest-tag.outputs.tag }}"
+          github_token: "${{ secrets.GITHUB_TOKEN }}"
+
+            #- name: Sync repo
+            #  run: |
+            #    git remote add upstream ${{ github.server_url }}/aptos-labs/aptos-core.git
+            #    git fetch upstream --tags
+            #    git checkout tags/${{ steps.latest-tag.outputs.tag }} -b upstream/${{ steps.latest-tag.outputs.tag }} 
+            #    git push origin upstream/${{ steps.latest-tag.outputs.tag }}
+            #  env:
+            #    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            #- name: repo-sync
+            #  uses: repo-sync/github-sync@v2
+            #  with:
+            #    #source_repo: "aptos-labs/aptos-core"
+            #    source_repo: "${{ github.server_url }}/aptos-labs/aptos-core.git"
+            #    source_branch: "${{ steps.latest-tag.outputs.tag }}"
+            #    #destination_repo: "${{ github.server_url }}/${{ github.repository }}"
+            #    destination_branch: "${{ steps.latest-tag.outputs.tag }}"
+            #    #github_token: ${{ secrets.REPO_TOKEN }}
+            #    github_token: ${{ secrets.GITHUB_TOKEN }}
+
       # Note: This won't create duplicate issues, as once the latest tag branch is pushed to remote it will be the new current tag
       # Thus, the workflow will exit in the `Fetch latest tag` step as up to date
       - name: Create issue for release
