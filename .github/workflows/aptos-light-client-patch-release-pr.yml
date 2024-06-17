@@ -19,6 +19,16 @@ jobs:
   release-pr:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up SSH
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          git config --global url."https://${{ secrets.REPO_TOKEN }}@github.com/".insteadOf ssh://git@github.com
+          git config --global url."https://${{ secrets.REPO_TOKEN }}@github.com".insteadOf https://github.com
+
       - name: Set base branch
         run: |
           if [[ "${{ inputs.type == 'hotfix' }}" == "true" ]]; then
@@ -28,29 +38,38 @@ jobs:
           fi
           echo "BASE_BRANCH=$BASE_BRANCH" | tee -a $GITHUB_ENV
           echo "PR_BRANCH=${{ inputs.type }}/${{ inputs.version }}-patched" | tee -a $GITHUB_ENV
+          echo "PR_DESCRIPTION=chore: Release ${{ inputs.version }}-patched" | tee -a $GITHUB_ENV
 
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ env.BASE_BRANCH }}
-
-      # TODO: Need some change for the PR to be possible, so recording the version change in `PATCH_RELEASE.md` since we're not using `Cargo.toml`?
+      # TODO: Need some change for the PR to be possible, so recording the version change in `PATCH_RELEASE.md` since we're not using `Cargo.toml`
       - name: Edit tag version in PATCH_RELEASE.md
         run: |
+          git fetch origin
+          # NOTE: Release branch must not exist already. If it does, use the `hotfix` input type to change it as any `release/*` branch is load-bearing
+          if [[ "${{ inputs.type }}" == "release" ]]; then
+            git checkout -b ${{ env.PR_BRANCH }}
+          else
+            git checkout ${{ env.PR_BRANCH }}
+          fi
+
           echo "Version ${{ inputs.version }}" | tee -a PATCH_RELEASE.md
+          git add .
+          git commit -m "${{ env.PR_DESCRIPTION }}"
+          git push origin $PR_BRANCH
 
-      # TODO: Automatically open dependabot-style PR to downstream crates when this PR is opened
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v6
-        with:
-          title: "chore: Release ${{ inputs.version }}-patched"
-          branch: "${{ env.PR_BRANCH }}"
-          base: "${{ env.BASE_BRANCH }}"
-          commit-message: "chore: Release ${{ inputs.version }}-patched"
-          body: |
-            This is an automated release PR for the patched version of `${{ inputs.version }}`.
+      # Note: Can't use `peter-evans/create-pull-request` because for hotfixes we need to make the PR with an existing branch
+      # The above action always creates a new one for single-commit PRs, thus overwriting the actual hotfix
+      - name: Create PR
+        run: |
+          cat << 'EOF' > body.md
+          This is an automated release PR for the patched version of `${{ inputs.version }}`.
 
-            Upstream changelog: https://github.com/aptos-labs/aptos-core/releases/tag/${{ inputs.version }}
+          Upstream changelog: https://github.com/aptos-labs/aptos-core/releases/tag/${{ inputs.version }}
 
-            On merge, this will trigger the [release publish workflow](${{ github.server_url }}/${{ github.repository }}/actions/workflows/aptos-light-client-patch-release-publish.yml), which will upload a new GitHub release with tag `{{ inputs.version }}-patched`.
+          On merge, this will trigger the [release publish workflow](${{ github.server_url }}/${{ github.repository }}/actions/workflows/aptos-light-client-patch-release-publish.yml), which will upload a new GitHub release with tag `{{ inputs.version }}-patched`.
 
-            [Workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          [Workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          EOF
+
+          gh pr create --title "${{ env.PR_DESCRIPTION }}" --body-file ./body.md --head ${{ env.PR_BRANCH }} --base ${{ env. BASE_BRANCH }}
+        env:
+          GH_TOKEN: ${{ github.token }}
