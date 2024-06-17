@@ -37,49 +37,27 @@ jobs:
 
       - name: Set up git
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global url."https://${{ secrets.REPO_TOKEN }}@github.com/".insteadOf ssh://git@github.com
+          git config --global url."https://${{ secrets.REPO_TOKEN }}@github.com".insteadOf https://github.com
 
-          #- name: Add upstream remote
-          #  run: |
-          #    git remote add upstream "${{ github.server_url }}/aptos-labs/aptos-core.git"
-          #    git fetch upstream --tags
+      - name: Sync upstream tag
+        run: |
+          git remote add upstream "${{ github.server_url }}/aptos-labs/aptos-core.git"
+          git fetch upstream refs/tags/${{ steps.latest-tag.outputs.tag }}:refs/remotes/upstream/tags/${{ steps.latest-tag.outputs.tag }}
+          git checkout -b upstream/${{ steps.latest-tag.outputs.tag }} upstream/tags/${{ steps.latest-tag.outputs.tag }}
+          git push origin upstream/${{ steps.latest-tag.outputs.tag }}
 
-      - name: Sync tag to branch
-        uses: repo-sync/github-sync@v2
-        with:
-          source_repo: "${{ github.server_url }}/aptos-labs/aptos-core.git"
-          source_branch: "refs/tags/${{ steps.latest-tag.outputs.tag }}"
-          destination_branch: "upstream/${{ steps.latest-tag.outputs.tag }}"
-          github_token: "${{ secrets.GITHUB_TOKEN }}"
-
-            #- name: Sync repo
-            #  run: |
-            #    git remote add upstream ${{ github.server_url }}/aptos-labs/aptos-core.git
-            #    git fetch upstream --tags
-            #    git checkout tags/${{ steps.latest-tag.outputs.tag }} -b upstream/${{ steps.latest-tag.outputs.tag }} 
-            #    git push origin upstream/${{ steps.latest-tag.outputs.tag }}
-            #  env:
-            #    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-            #- name: repo-sync
-            #  uses: repo-sync/github-sync@v2
-            #  with:
-            #    #source_repo: "aptos-labs/aptos-core"
-            #    source_repo: "${{ github.server_url }}/aptos-labs/aptos-core.git"
-            #    source_branch: "${{ steps.latest-tag.outputs.tag }}"
-            #    #destination_repo: "${{ github.server_url }}/${{ github.repository }}"
-            #    destination_branch: "${{ steps.latest-tag.outputs.tag }}"
-            #    #github_token: ${{ secrets.REPO_TOKEN }}
-            #    github_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Checkout code
+        uses: actions/checkout@v4
 
       # Note: This won't create duplicate issues, as once the latest tag branch is pushed to remote it will be the new current tag
-      # Thus, the workflow will exit in the `Fetch latest tag` step as up to date
+      # Thus, if up to date the workflow will exit in the `Fetch latest tag` step
       - name: Create issue for release
         uses: JasonEtco/create-an-issue@v2
         with:
           filename: .github/ISSUE_TEMPLATE/tag_release.md
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.REPO_TOKEN }}
           RELEASE_TAG: ${{ steps.latest-tag.outputs.tag }}
           UPSTREAM_URL: https://github.com/aptos-labs/aptos-core/releases/tag/${{ steps.latest-tag.outputs.tag }}
           RELEASE_PR_WORKFLOW: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/aptos-light-client-patch-release-pr.yml

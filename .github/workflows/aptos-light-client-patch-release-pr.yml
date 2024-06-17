@@ -1,4 +1,3 @@
-# TODO: Clarify whether names should be `tag` or `version`
 name: Aptos LC - Create Patched Release PR
 
 on:
@@ -11,8 +10,8 @@ on:
           - release
           - hotfix
         required: true
-      # Tag to patch, e.g. `aptos-node-v1.14.0`
-      tag:
+      # Tag version to patch, e.g. `aptos-node-v1.14.0`
+      version:
         description: 'Release tag patched'
         required: true
 
@@ -22,18 +21,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.type }}/${{ inputs.tag }}-patched
+          ref: ${{ inputs.type }}/${{ inputs.version }}-patched
 
-      - name: Edit tag in README.md
+      # TODO: Need some change for the PR to be possible, so recording the version change in `PATCH_RELEASE.md` since we're not using `Cargo.toml`?
+      - name: Edit tag version in README.md
         run: |
-          echo "Dummy change" >> Cargo.toml
+          echo "Version ${{ inputs.version }}" | tee -a PATCH_RELEASE.md
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
-          title: "Release ${{ inputs.tag }}-patched"
-          branch: "${{ inputs.type }}/${{ inputs.tag }}-patched"
+          branch: "${{ inputs.type }}/${{ inputs.version }}-patched"
           title: "chore: Release ${{ inputs.version }}"
-          base: "${{ inputs.type == 'hotfix' && 'release/${{ inputs.tag }}' || 'release' }}:"
-          commit-message: "chore: Release ${{ inputs.tag }}"
+          base: "${{ inputs.type == 'hotfix' && 'release/${{ inputs.version }}' || 'release' }}"
+          commit-message: "chore: Release ${{ inputs.version }}"
 
