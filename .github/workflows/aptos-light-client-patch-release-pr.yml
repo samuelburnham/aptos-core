@@ -20,8 +20,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.type }}/${{ inputs.version }}-patched
 
       # TODO: Need some change for the PR to be possible, so recording the version change in `PATCH_RELEASE.md` since we're not using `Cargo.toml`?
       - name: Edit tag version in README.md
@@ -33,8 +31,7 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           title: "chore: Release ${{ inputs.version }}-patched"
-          base: release/${{ inputs.version }}-patched
-          branch: ${{ inputs.type }}/${{ inputs.version }}-patched-pr
+          branch: release/${{ inputs.type }}/${{ inputs.version }}-patched
           commit-message: "chore: Release ${{ inputs.version }}-patched"
           body: |
             This is a release PR for the patched version of `${{ inputs.version }}`.
