@@ -12,19 +12,39 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.pull_request.merged == true
     steps:
+      - name: Set up SSH
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          git config --global url."https://${{ secrets.REPO_TOKEN }}@github.com/".insteadOf ssh://git@github.com
+          git config --global url."https://${{ secrets.REPO_TOKEN }}@github.com".insteadOf https://github.com
+
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Get tag
-        id: get-tag
+      - name: Get version
+        id: get-version
         run: |
-          TAG=$(echo "${{ github.event.pull_request.head.ref }}" | cut -d'/' -f 2)
-          echo "tag=${TAG}" | tee -a "$GITHUB_OUTPUT"
+          VERSION=$(echo "${{ github.event.pull_request.head.ref }}" | cut -d'/' -f 2)
+          git tag -a $VERSION -m "$VERSION" ${{ github.event.pull_request.base.ref }}
+          git push origin $VERSION -f
+          echo "version=$VERSION" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Build Changelog
+        id: github_release
+        uses: mikepenz/release-changelog-builder-action@v4
+        with:
+          toTag: ${{ steps.get-version.outputs.version }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: ncipollo/release-action@v1
         with:
+          title: ${{ steps.get-tag.outputs.version }} Release
           body: ${{ steps.github_release.outputs.changelog }}
-          tag_name: ${{ steps.get-tag.outputs.tag }}
-          target_commitish: ${{ github.event.pull_request.base.ref }}
+          tag: ${{ steps.get-tag.outputs.version }}
+          commit: ${{ github.event.pull_request.base.ref }}
+          allowUpdates: true
 
