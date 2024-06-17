@@ -1,0 +1,56 @@
+name: Aptos LC - Create Patched Release PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      type:
+        description: 'release or hotfix'
+        type: choice
+        options:
+          - release
+          - hotfix
+        required: true
+      # Tag version to patch, e.g. `aptos-node-v1.13.3`
+      version:
+        description: 'Release tag patched'
+        required: true
+
+jobs:
+  release-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set base branch
+        run: |
+          if [[ "${{ inputs.type == 'hotfix' }}" == "true" ]]; then
+            BASE_BRANCH="release/${{ inputs.version }}-patched"
+          else
+            BASE_BRANCH="main"
+          fi
+          echo "BASE_BRANCH=$BASE_BRANCH" | tee -a $GITHUB_ENV
+          echo "PR_BRANCH=${{ inputs.type }}/${{ inputs.version }}-patched" | tee -a $GITHUB_ENV
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.BASE_BRANCH }}
+
+      # TODO: Need some change for the PR to be possible, so recording the version change in `PATCH_RELEASE.md` since we're not using `Cargo.toml`?
+      - name: Edit tag version in PATCH_RELEASE.md
+        run: |
+          echo "Version ${{ inputs.version }}" | tee -a PATCH_RELEASE.md
+
+      # TODO: Automatically open dependabot-style PR to downstream crates when this PR is opened
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          title: "chore: Release ${{ inputs.version }}-patched"
+          branch: "${{ env.PR_BRANCH }}"
+          base: "${{ env.BASE_BRANCH }}"
+          commit-message: "chore: Release ${{ inputs.version }}-patched"
+          body: |
+            This is an automated release PR for the patched version of `${{ inputs.version }}`.
+
+            Upstream changelog: https://github.com/aptos-labs/aptos-core/releases/tag/${{ inputs.version }}
+
+            On merge, this will trigger the [release publish workflow](${{ github.server_url }}/${{ github.repository }}/actions/workflows/aptos-light-client-patch-release-publish.yml), which will upload a new GitHub release with tag `{{ inputs.version }}-patched`.
+
+            [Workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})

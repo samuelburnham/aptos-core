@@ -1,0 +1,50 @@
+name: Aptos LC - Check for new tags and create issue
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Runs every day at midnight
+  push:
+    branches:
+      - main
+
+jobs:
+  check-tags:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Fetch latest tag
+        id: latest-tag
+        run: |
+          LATEST_TAG=$(curl --silent "https://api.github.com/repos/aptos-labs/aptos-core/releases" | jq -r '.[] | select(.name | ascii_downcase | contains("mainnet")) | .tag_name' | grep '^aptos-node-v' | sort -V | tail -n 1)
+          # Check if there are any tags
+          LOCAL_TAGS=$(git rev-list --tags --max-count=1 2>/dev/null)
+          if [[ -n "$LOCAL_TAGS" ]]; then
+            # If tags exist, describe the most recent tag
+            CURRENT_TAG=$(git describe --tags $(git rev-list --tags --max-count=1))
+            if [[ $(echo -e "$CURRENT_TAG\n$LATEST_TAG" | sort -V | tail -n 1) == $CURRENT_TAG ]]; then
+              echo "The current tag is up to date."
+              exit 0
+            fi
+          fi
+          # If the current tag is not up to date, proceed to open an issue
+          echo "tag=${LATEST_TAG}" | tee -a $GITHUB_OUTPUT
+
+      # Note: This won't create duplicate issues, as once the latest tag branch is pushed to remote it will be the new current tag
+      # Thus, if up to date the workflow will exit in the `Fetch latest tag` step
+      - name: Create issue for release
+        uses: JasonEtco/create-an-issue@v2
+        with:
+          filename: .github/ISSUE_TEMPLATE/tag_release.md
+          update_existing: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.REPO_TOKEN }}
+          RELEASE_TAG: ${{ steps.latest-tag.outputs.tag }}
+          UPSTREAM_URL: https://github.com/aptos-labs/aptos-core/releases/tag/${{ steps.latest-tag.outputs.tag }}
+          RELEASE_PR_WORKFLOW: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/aptos-light-client-patch-release-pr.yml
+          RELEASE_MERGE_WORKFLOW: ${{ github.server_url }}/${{ github.repository }}/actions/workflows/aptos-light-client-patch-release-publish.yml
+          WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
