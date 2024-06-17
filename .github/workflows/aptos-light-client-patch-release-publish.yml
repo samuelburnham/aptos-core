@@ -1,0 +1,37 @@
+name: Aptos LC - Publish Patched Release
+
+on:
+  pull_request:
+    types: [ closed ]
+    branches:
+      - release/*
+
+jobs:
+  release-pr:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.merged == true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get tag
+        id: get-tag
+        run: |
+          TAG=$(echo "${{ github.event.pull_request.head.ref }}" | cut -d'/' -f 2)
+          echo "tag=${TAG}" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Build Changelog
+        id: github_release
+        uses: mikepenz/release-changelog-builder-action@v4
+        with:
+          toTag: release/${{ steps.get-tag.outputs.tag }}-patched
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ steps.github_release.outputs.changelog }}
+          tag_name: ${{ steps.get-tag.outputs.tag }}-patched
+          target_commitish: ${{ github.event.pull_request.base.ref }}
+
